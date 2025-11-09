@@ -20,31 +20,41 @@ st.markdown("""
         border-radius: 10px;
         border-left: 5px solid #1f77b4;
         margin: 15px 0;
+        line-height: 1.6;
+    }
+    .main-header {
+        font-size: 2.5rem;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 @st.cache_resource
 def load_model():
-    """Load the fine-tuned model and tokenizer"""
+    """Load the fine-tuned model and tokenizer from root directory"""
     try:
-        model_dir = "./t5_summarization_model"
+        # Since all files are in root, we load from current directory "."
+        st.info("🔍 Loading model from current directory...")
         
-        if not os.path.exists(model_dir):
-            st.error("Model directory not found!")
-            return None, None, None
-            
-        # Check for essential files
+        # Check if essential model files exist in root
         required_files = ['config.json', 'model.safetensors', 'tokenizer.json']
-        missing_files = [f for f in required_files if not os.path.exists(os.path.join(model_dir, f))]
+        missing_files = [f for f in required_files if not os.path.exists(f)]
         
         if missing_files:
-            st.error(f"Missing files: {', '.join(missing_files)}")
+            st.error(f"❌ Missing files: {', '.join(missing_files)}")
+            st.info("Current directory files:")
+            st.write(os.listdir('.'))
             return None, None, None
         
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
+        st.success("✅ All model files found! Loading tokenizer and model...")
         
+        # Load from current directory
+        tokenizer = AutoTokenizer.from_pretrained(".")
+        model = AutoModelForSeq2SeqLM.from_pretrained(".")
+        
+        # Set device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = model.to(device)
         
@@ -52,10 +62,13 @@ def load_model():
         return model, tokenizer, device
         
     except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
+        st.error(f"❌ Error loading model: {str(e)}")
+        # Show what files are available for debugging
+        st.info("📁 Files in current directory:")
+        st.write(os.listdir('.'))
         return None, None, None
 
-def generate_summary(model, tokenizer, device, text, max_length=100):
+def generate_summary(model, tokenizer, device, text, max_length=100, num_beams=2):
     """Generate summary using the fine-tuned model"""
     try:
         # Add T5 prefix
@@ -79,9 +92,10 @@ def generate_summary(model, tokenizer, device, text, max_length=100):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_length=max_length,
-                num_beams=2,
+                num_beams=num_beams,
                 length_penalty=2.0,
-                early_stopping=True
+                early_stopping=True,
+                no_repeat_ngram_size=2
             )
         
         summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -92,21 +106,32 @@ def generate_summary(model, tokenizer, device, text, max_length=100):
         return None
 
 def main():
-    st.title("📝 AI Text Summarizer")
-    st.markdown("Transform long articles into concise summaries")
+    st.markdown('<h1 class="main-header">📝 AI Text Summarizer</h1>', unsafe_allow_html=True)
+    st.markdown("### Transform long articles into concise summaries")
     
-    # Sidebar settings
-    st.sidebar.title("Settings")
+    # Sidebar
+    st.sidebar.title("⚙️ Settings")
     max_length = st.sidebar.slider("Summary Length", 50, 150, 100)
+    num_beams = st.sidebar.slider("Quality", 1, 4, 2)
     
     # Load model
     model, tokenizer, device = load_model()
     
     if model is None:
         st.error("""
-        ❌ Model failed to load. Please check:
-        - All model files are in 't5_summarization_model' folder
-        - Required files: config.json, model.safetensors, tokenizer files
+        ❌ Model failed to load. 
+        
+        **Please ensure all these files are in your root directory:**
+        - config.json
+        - generation_config.json  
+        - model.safetensors
+        - special_tokens_map.json
+        - spiece.model
+        - tokenizer.json
+        - tokenizer_config.json
+        - training_args.bin
+        
+        **Current files detected:** (see above)
         """)
         return
     
@@ -117,56 +142,86 @@ def main():
         st.subheader("📄 Input Text")
         
         sample_texts = {
-            "Technology": "Apple announced new iPhones with better cameras and faster processors. The devices feature USB-C charging and improved battery life.",
-            "Science": "NASA's rover collected Martian rock samples that may contain signs of ancient life. The samples will be returned to Earth for analysis.",
-            "Environment": "Climate change is causing more extreme weather events worldwide. Scientists urge immediate action to reduce carbon emissions."
+            "Technology News": """
+            Apple Inc. has unveiled its latest smartphone lineup, the iPhone 15 series, marking a significant upgrade from previous generations. 
+            The new devices feature titanium frames, improved camera systems with 48-megapixel main sensors, and the powerful A17 Pro chip. 
+            Notably, this generation transitions from Apple's proprietary Lightning connector to USB-C, aligning with European Union regulations.
+            """,
+            "Climate Change": """
+            A comprehensive United Nations report indicates that climate change impacts are accelerating at an unprecedented rate. 
+            The study reveals that global temperatures have already risen 1.2°C above pre-industrial levels, approaching the critical 1.5°C threshold.
+            Scientists urge immediate action to reduce greenhouse gas emissions and transition to renewable energy sources.
+            """,
+            "Space Exploration": """
+            NASA's Perseverance rover has successfully collected the first rock core samples from Mars that will be returned to Earth. 
+            The samples, extracted from an ancient river delta environment, show promising signs of preserving evidence of past microbial life.
+            This represents a major milestone in the search for extraterrestrial life within our solar system.
+            """
         }
         
-        input_method = st.radio("Choose input:", ["Type text", "Use sample"])
+        input_method = st.radio("Choose input method:", ["Type text", "Use sample"], horizontal=True)
         
         if input_method == "Type text":
-            input_text = st.text_area("Enter text:", height=200)
+            input_text = st.text_area(
+                "Enter your text to summarize:",
+                height=250,
+                placeholder="Paste your article, document, or any long text here...",
+                help="The model works best with well-structured articles of 200+ words"
+            )
         else:
-            selected = st.selectbox("Sample:", list(sample_texts.keys()))
-            input_text = st.text_area("Text:", value=sample_texts[selected], height=200)
+            selected_sample = st.selectbox("Choose sample text:", list(sample_texts.keys()))
+            input_text = st.text_area(
+                "Sample text:",
+                value=sample_texts[selected_sample],
+                height=250
+            )
     
     with col2:
         st.subheader("📋 Generated Summary")
         
         if st.button("🚀 Generate Summary", type="primary", use_container_width=True):
-            if not input_text or len(input_text.strip()) < 20:
-                st.warning("Please enter at least 20 characters.")
+            if not input_text or len(input_text.strip()) < 30:
+                st.warning("⚠️ Please enter at least 30 characters of text.")
             else:
-                with st.spinner("Generating summary..."):
-                    summary = generate_summary(model, tokenizer, device, input_text, max_length)
+                with st.spinner("🔄 Generating summary..."):
+                    summary = generate_summary(model, tokenizer, device, input_text, max_length, num_beams)
                 
                 if summary:
-                    st.markdown("### ✅ Summary")
+                    st.markdown("### ✅ Summary Result")
                     st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
                     
-                    # Statistics
+                    # Calculate statistics
                     orig_words = len(input_text.split())
                     sum_words = len(summary.split())
-                    compression = ((orig_words - sum_words) / orig_words) * 100
+                    compression = ((orig_words - sum_words) / orig_words) * 100 if orig_words > 0 else 0
                     
-                    col1, col2 = st.columns(2)
+                    # Display stats
+                    col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Original Words", orig_words)
-                        st.metric("Summary Words", sum_words)
                     with col2:
+                        st.metric("Summary Words", sum_words)
+                    with col3:
                         st.metric("Reduction", f"{compression:.1f}%")
                     
-                    # Download
+                    # Download button
                     st.download_button(
                         "💾 Download Summary",
                         summary,
-                        file_name="summary.txt",
-                        mime="text/plain"
+                        file_name="ai_summary.txt",
+                        mime="text/plain",
+                        use_container_width=True
                     )
                 else:
-                    st.error("Failed to generate summary.")
+                    st.error("❌ Failed to generate summary. Please try again with different text.")
         else:
-            st.info("Enter text and click 'Generate Summary'")
+            st.info("""
+            **Ready to summarize!**
+            
+            • Enter your text in the left panel
+            • Click the **Generate Summary** button
+            • Get your concise summary here
+            """)
 
 if __name__ == "__main__":
     main()
