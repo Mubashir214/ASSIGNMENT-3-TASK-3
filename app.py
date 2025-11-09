@@ -27,10 +27,6 @@ st.markdown("""
         margin: 15px 0;
         line-height: 1.6;
     }
-    .loading-spinner {
-        text-align: center;
-        padding: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,15 +57,25 @@ def initialize_model():
         progress_bar.progress(50)
         time.sleep(1)
         
-        # Load model with optimizations for large models
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            ".",
-            device_map="auto",
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            offload_folder="./offload"
-        )
-        
+        # Check if CUDA (GPU) is available
+        if torch.cuda.is_available():
+            st.info("GPU detected. Loading model with GPU optimizations...")
+            # Load model with device_map for GPU
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                ".",
+                device_map="auto",
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+            )
+        else:
+            st.info("No GPU found. Loading model on CPU...")
+            # Fallback to CPU - SIMPLIFIED without device_map
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                ".",
+                torch_dtype=torch.float32,
+            )
+            model = model.to("cpu")
+
         status_text.info("🔄 Step 3/3: Finalizing model setup...")
         progress_bar.progress(80)
         time.sleep(1)
@@ -85,7 +91,22 @@ def initialize_model():
         
     except Exception as e:
         st.error(f"❌ Model initialization failed: {str(e)}")
-        return False
+        
+        # Try one more time with absolute basic loading
+        try:
+            st.info("🔄 Trying basic loading method...")
+            model = AutoModelForSeq2SeqLM.from_pretrained(".")
+            tokenizer = AutoTokenizer.from_pretrained(".")
+            model = model.to("cpu")
+            st.session_state.model = model
+            st.session_state.tokenizer = tokenizer
+            st.session_state.model_initialized = True
+            st.success("✅ Model loaded with basic method!")
+            return True
+        except Exception as e2:
+            st.error(f"❌ Basic loading also failed: {str(e2)}")
+            return False
+        
     return True
 
 def generate_summary_lazy(text, max_length=100):
