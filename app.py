@@ -3,7 +3,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import os
 
-# Set page configuration
+# Set page config
 st.set_page_config(
     page_title="AI Text Summarizer",
     page_icon="📝",
@@ -29,42 +29,53 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource(show_spinner=False)
-def load_model():
-    """Load YOUR fine-tuned model"""
+# Initialize session state
+if 'model_initialized' not in st.session_state:
+    st.session_state.model_initialized = False
+if 'tokenizer' not in st.session_state:
+    st.session_state.tokenizer = None
+if 'model' not in st.session_state:
+    st.session_state.model = None
+
+def initialize_model():
+    """Initialize model only when needed"""
     try:
-        # Show loading message
-        st.info("🔄 Loading YOUR fine-tuned model... This may take a minute.")
+        st.info("🚀 Initializing YOUR fine-tuned model... Please wait.")
         
-        # Load tokenizer first
+        # Load tokenizer first (lightweight)
         tokenizer = AutoTokenizer.from_pretrained(".")
+        st.session_state.tokenizer = tokenizer
         
-        # Load model with memory optimizations
+        # Load model with optimizations for large models
         model = AutoModelForSeq2SeqLM.from_pretrained(
             ".",
-            torch_dtype=torch.float32,
-            low_cpu_mem_usage=True
+            device_map="auto",
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            offload_folder="./offload"
         )
         
-        # Use CPU for inference (more stable on Streamlit)
-        device = torch.device("cpu")
-        model = model.to(device)
-        model.eval()
-        
+        st.session_state.model = model
+        st.session_state.model_initialized = True
         st.success("✅ YOUR fine-tuned model loaded successfully!")
-        return model, tokenizer, device
         
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
-        return None, None, None
+        st.error(f"❌ Model initialization failed: {str(e)}")
+        return False
+    return True
 
-def generate_summary(model, tokenizer, device, text, max_length=128):
-    """Generate summary using YOUR model"""
+def generate_summary_lazy(text, max_length=100):
+    """Generate summary with lazy-loaded model"""
     try:
-        # Add T5 prefix
-        input_text = "summarize: " + text
+        if not st.session_state.model_initialized:
+            if not initialize_model():
+                return None
         
-        # Tokenize
+        tokenizer = st.session_state.tokenizer
+        model = st.session_state.model
+        
+        # Prepare input
+        input_text = "summarize: " + text
         inputs = tokenizer(
             input_text, 
             max_length=512, 
@@ -73,19 +84,18 @@ def generate_summary(model, tokenizer, device, text, max_length=128):
             return_tensors="pt"
         )
         
-        input_ids = inputs.input_ids.to(device)
-        attention_mask = inputs.attention_mask.to(device)
+        # Move inputs to same device as model
+        device = next(model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # Generate with your model
+        # Generate
         with torch.no_grad():
             outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
+                **inputs,
                 max_length=max_length,
-                num_beams=4,
-                length_penalty=2.0,
+                num_beams=2,
                 early_stopping=True,
-                no_repeat_ngram_size=3
+                no_repeat_ngram_size=2
             )
         
         summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -96,43 +106,30 @@ def generate_summary(model, tokenizer, device, text, max_length=128):
         return None
 
 def main():
-    # Header
     st.markdown('<h1 class="main-header">📝 AI Text Summarizer</h1>', unsafe_allow_html=True)
     st.markdown("### Using YOUR Fine-tuned Model")
     
-    # Initialize model
-    if 'model_loaded' not in st.session_state:
-        model, tokenizer, device = load_model()
-        if model is not None:
-            st.session_state.model = model
-            st.session_state.tokenizer = tokenizer
-            st.session_state.device = device
-            st.session_state.model_loaded = True
-        else:
-            st.session_state.model_loaded = False
-    
-    # Sidebar
-    st.sidebar.title("⚙️ Settings")
-    max_length = st.sidebar.slider("Summary Length", 50, 200, 128)
-    
-    # Show file check
+    # File check
     with st.sidebar:
-        st.markdown("### 📁 Model Files Check")
+        st.subheader("📁 Model Files Status")
         required_files = ['config.json', 'model.safetensors', 'tokenizer.json']
+        all_files_ok = True
+        
         for file in required_files:
             if os.path.exists(file):
                 st.success(f"✅ {file}")
             else:
                 st.error(f"❌ {file}")
+                all_files_ok = False
+        
+        if not all_files_ok:
+            st.error("Missing model files! Upload all files to root directory.")
+            return
     
-    if not st.session_state.model_loaded:
-        st.error("""
-        **Model failed to load. Please check:**
-        1. All model files are in the root directory
-        2. Files include: config.json, model.safetensors, tokenizer.json, etc.
-        3. Wait a few minutes and reload the app
-        """)
-        return
+    # Settings
+    with st.sidebar:
+        st.subheader("⚙️ Settings")
+        max_length = st.slider("Summary Length", 50, 150, 100)
     
     # Main interface
     col1, col2 = st.columns([1, 1])
@@ -141,96 +138,54 @@ def main():
         st.subheader("📄 Input Text")
         
         sample_texts = {
-            "Technology": """
-            Apple has announced the launch of its new iPhone 15 series, featuring improved cameras, 
-            a faster A17 processor, and longer battery life. The new models also include USB-C charging, 
-            a first for iPhones, and come in a variety of colors. Pre-orders begin this week with 
-            shipping expected next month. Analysts predict strong sales due to high consumer demand 
-            and the popularity of the upgraded camera system.
-            """,
-            "Science": """
-            NASA's Perseverance rover has successfully collected its first samples of Martian rock, 
-            marking a historic step in humanity's exploration of Mars. The samples will be returned 
-            to Earth by a future mission, allowing scientists to study the planet's geology and 
-            look for signs of ancient life. The rover has been exploring the Jezero Crater, 
-            an ancient river delta, since its landing in February 2021.
-            """,
-            "Environment": """
-            The United Nations has issued a warning about the increasing severity of climate change 
-            effects worldwide. Rising global temperatures are causing more frequent and intense 
-            wildfires, floods, and hurricanes. Governments are urged to take urgent action 
-            to reduce carbon emissions and invest in sustainable energy solutions to prevent 
-            catastrophic environmental consequences.
-            """
+            "Technology": """Apple's new iPhone features advanced cameras and faster processors.""",
+            "Science": """NASA's rover discovered evidence of ancient water on Mars.""",
+            "News": """The company announced record profits this quarter."""
         }
         
-        input_method = st.radio("Input method:", ["Type text", "Use sample"], horizontal=True)
+        input_method = st.radio("Input:", ["Type text", "Quick sample"], horizontal=True)
         
         if input_method == "Type text":
             input_text = st.text_area(
-                "Enter your text:",
-                height=300,
-                placeholder="Paste your article or text here..."
+                "Enter text:",
+                height=250,
+                placeholder="Paste your article here..."
             )
         else:
-            selected_sample = st.selectbox("Choose sample:", list(sample_texts.keys()))
-            input_text = st.text_area(
-                "Sample text:",
-                value=sample_texts[selected_sample],
-                height=300
-            )
+            selected = st.selectbox("Sample:", list(sample_texts.keys()))
+            input_text = sample_texts[selected]
+            st.text_area("Sample text:", value=input_text, height=150)
     
     with col2:
         st.subheader("📋 Generated Summary")
         
         if st.button("🚀 Generate Summary", type="primary", use_container_width=True):
-            if not input_text or len(input_text.strip()) < 30:
-                st.warning("Please enter at least 30 characters.")
+            if not input_text or len(input_text.strip()) < 10:
+                st.warning("Please enter some text.")
             else:
                 with st.spinner("🔄 Generating summary with YOUR model..."):
-                    summary = generate_summary(
-                        st.session_state.model,
-                        st.session_state.tokenizer, 
-                        st.session_state.device,
-                        input_text, 
-                        max_length
-                    )
+                    summary = generate_summary_lazy(input_text, max_length)
                 
                 if summary:
                     st.markdown("### ✅ Summary")
                     st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
                     
-                    # Statistics
-                    orig_words = len(input_text.split())
-                    sum_words = len(summary.split())
-                    compression = ((orig_words - sum_words) / orig_words) * 100
-                    
-                    col1, col2, col3 = st.columns(3)
+                    # Stats
+                    col1, col2 = st.columns(2)
                     with col1:
-                        st.metric("Original Words", orig_words)
+                        st.metric("Input Words", len(input_text.split()))
                     with col2:
-                        st.metric("Summary Words", sum_words)
-                    with col3:
-                        st.metric("Reduction", f"{compression:.1f}%")
+                        st.metric("Summary Words", len(summary.split()))
                     
-                    # Download button
+                    # Download
                     st.download_button(
                         "💾 Download Summary",
                         summary,
                         file_name="summary.txt",
-                        mime="text/plain",
-                        use_container_width=True
+                        mime="text/plain"
                     )
                 else:
-                    st.error("Failed to generate summary. Please try again.")
-        else:
-            st.info("""
-            **Ready to use YOUR model!**
-            
-            • Enter text in the left panel
-            • Click 'Generate Summary'
-            • Get results from your fine-tuned model
-            """)
+                    st.error("Failed to generate summary. The model might be still loading.")
 
 if __name__ == "__main__":
     main()
