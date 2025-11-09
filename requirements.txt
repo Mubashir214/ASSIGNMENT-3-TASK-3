@@ -1,3 +1,4 @@
-pip>=23.0
-setuptools>=65.0
-wheel>=0.38.0
+# Change this line:
+# numpy==1.24.0
+# To this:
+numpy>=1.24.0
